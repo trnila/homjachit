@@ -242,7 +242,6 @@ int clients[MAX_CLIENTS];
 
 atomic_int clients_count;
 QueueHandle_t Qs[MAX_CLIENTS];
-bool active[MAX_CLIENTS];
 
 typedef struct {
   camera_fb_t* fb;
@@ -256,9 +255,80 @@ void fb_drop(camera_fb_rc_t* fb) {
   }
 }
 
+typedef struct {
+  uint8_t subscribe;
+  TaskHandle_t task;
+
+  QueueHandle_t queue;
+} camera_ctrl_req_t;
+
+QueueHandle_t camera_reqs;
+
+
+QueueHandle_t camera_subscribe() {
+  camera_ctrl_req_t req;
+  req.subscribe = 1;
+  req.task = xTaskGetCurrentTaskHandle();
+  req.queue = NULL;
+
+  camera_ctrl_req_t *p = &req;
+  xQueueSend(camera_reqs, &p, portMAX_DELAY);
+  printf("sent\n");
+  ulTaskNotifyTake(false, portMAX_DELAY);
+  printf("got\n");
+  assert(req.queue != NULL);
+  return req.queue;
+}
+
+void camera_unsubscribe(QueueHandle_t queue) {
+  camera_ctrl_req_t req;
+  req.subscribe = 0;
+  req.task = xTaskGetCurrentTaskHandle();
+  req.queue = queue;
+  camera_ctrl_req_t *p = &req;
+  xQueueSend(camera_reqs, &p, portMAX_DELAY);
+}
+
+uint32_t active;
 void camera_task(void *p) {
+  camera_reqs = xQueueCreate(MAX_CLIENTS, sizeof(camera_ctrl_req_t*));
 
   for(;;) {
+    camera_ctrl_req_t *req;
+    while(xQueueReceive(camera_reqs, &req, 0)) {
+      if(req->subscribe) {
+        int available_idx = -1;
+        for(int i = 0; i < MAX_CLIENTS; i++) {
+          if(!(active & (1U << i))) {
+            available_idx = i;
+            active |= 1U << i;
+            break;
+          }
+        }
+
+        assert(available_idx >= 0);
+        req->queue = Qs[available_idx];
+        xTaskNotifyGive(req->task);
+      } else {
+        bool found = false;
+        for(int i = 0; i < MAX_CLIENTS; i++) {
+          if(req->queue == Qs[i]) {
+            active &= ~(1U << i);
+
+            camera_fb_rc_t* rc = NULL;
+            while(xQueueReceive(req->queue, &rc, 0)) {
+              fb_drop(rc);
+            }
+            found = true;
+            break;
+          }
+        }
+
+        assert(found);
+      }
+    }
+
+
     camera_fb_t *fb = esp_camera_fb_get();
     if(!fb) {
       printf("no buffer\r\n");
@@ -271,7 +341,7 @@ void camera_task(void *p) {
     atomic_store(&rc->refcount, 1);
 
     for(int i = 0; i < MAX_CLIENTS; i++) {
-      if(active[i]) {
+      if(active & (1U << i)) {
         atomic_fetch_add(&rc->refcount, 1);
         if(!xQueueSend(Qs[i], &rc, 0)) {
           fb_drop(rc);
@@ -297,10 +367,12 @@ void stream_task(void *p) {
 
   const char *str = "HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=" PART_BOUNDARY "\r\nConnection: close\r\n";
   write(params->socket, str, strlen(str));
+
+  QueueHandle_t queue = camera_subscribe();
   bool connected = true;
   while(connected) {
     camera_fb_rc_t* rc = NULL;
-    BaseType_t ret = xQueueReceive(params->queue, &rc, portMAX_DELAY);
+    BaseType_t ret = xQueueReceive(queue, &rc, portMAX_DELAY);
 
     char hdr[256];
     int len = snprintf(hdr, sizeof(hdr), "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", rc->fb->len);
@@ -317,6 +389,7 @@ void stream_task(void *p) {
   }
 
   close(params->socket);
+  camera_unsubscribe(queue);
   vTaskDelete(NULL);
 }
 
@@ -352,7 +425,6 @@ void server_task(void* p) {
         p->queue = Qs[idx];
         BaseType_t ret = xTaskCreate(stream_task, "client", 4096, p, 1, NULL);
         assert(ret);
-        active[idx] = true;
         atomic_fetch_add(&clients_count, 1);
       }
     }
