@@ -233,6 +233,9 @@ httpd_uri_t uri_get = {
 };
 
     char s[1024];
+    char str[128];
+#define MAX_CLIENTS 4
+int clients[MAX_CLIENTS];
 void server_task(void* p) {
   struct sockaddr_in addr;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -248,37 +251,59 @@ void server_task(void* p) {
   err = listen(sock, 1);
   assert(err == 0);
 
+  err = fcntl (sock, F_SETFL , O_NONBLOCK );
+  assert(err == 0);
+
+  for(int i = 0; i < MAX_CLIENTS; i++) {
+    clients[i] = -1;
+  }
+
 
   for(;;) {
     int client_sock = accept(sock, NULL, NULL);
-    if(!client_sock) {
-      continue;
+    if(client_sock >= 0) {
+      bool ok = false;
+      for(int i = 0; i < MAX_CLIENTS; i++) {
+        if(clients[i] == -1) {
+          clients[i] = client_sock;
+          ok = true;
+          // read request
+          read(client_sock, s, sizeof(s));
+          printf("client accepted %d\n", clients[i]);
+
+          const char *str = "HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=" PART_BOUNDARY "\r\nConnection: close\r\n";
+          write(client_sock, str, strlen(str));
+          break;
+        }
+      }
+
+      if(!ok) {
+        printf("not accepted\n");
+        close(client_sock);
+      }
     }
 
-    read(client_sock, s, sizeof(s));
-    printf("%s", s);
+    camera_fb_t * fb = NULL;
+    fb = esp_camera_fb_get();
+    assert(fb);
 
-    printf("client connected\n");
+    int len = snprintf(str, sizeof(str), "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
 
-    char *str = "HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=" PART_BOUNDARY "\r\nConnection: close\r\n";
-    write(client_sock, str, strlen(str));
-
-
-    for(;;) {
-        camera_fb_t * fb = NULL;
-        fb = esp_camera_fb_get();
-        assert(fb);
-
-        char str[128];
-        int len = snprintf(str, sizeof(str), "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-        write(client_sock, str, len);
-        write(client_sock, fb->buf, fb->len);
-
-        esp_camera_fb_return(fb);
-        printf("tick\r\n");
+    for(int i = 0; i < MAX_CLIENTS; i++) {
+      if(clients[i] >= 0) {
+        printf("%d %d\n", i, clients[i]);
+        if(write(clients[i], str, len) != len) {
+          close(clients[i]);
+          clients[i] = -1;
+        }
+        if(write(clients[i], fb->buf, fb->len) != fb->len) {
+          close(clients[i]);
+          clients[i] = -1;
+        }
+      }
     }
-
-    close(client_sock);
+    esp_camera_fb_return(fb);
+    ESP_LOGI(TAG, "tick");
   }
 }
 
