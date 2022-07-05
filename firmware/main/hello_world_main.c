@@ -7,7 +7,8 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-
+#include "lwip/err.h"
+#include "lwip/sockets.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
@@ -231,6 +232,56 @@ httpd_uri_t uri_get = {
     .user_ctx = NULL
 };
 
+    char s[1024];
+void server_task(void* p) {
+  struct sockaddr_in addr;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(81);
+
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  assert(sock >= 0);
+
+  int err = bind(sock, (struct sockaddr*) &addr, sizeof(addr));
+  assert(err == 0);
+
+  err = listen(sock, 1);
+  assert(err == 0);
+
+
+  for(;;) {
+    int client_sock = accept(sock, NULL, NULL);
+    if(!client_sock) {
+      continue;
+    }
+
+    read(client_sock, s, sizeof(s));
+    printf("%s", s);
+
+    printf("client connected\n");
+
+    char *str = "HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=" PART_BOUNDARY "\r\nConnection: close\r\n";
+    write(client_sock, str, strlen(str));
+
+
+    for(;;) {
+        camera_fb_t * fb = NULL;
+        fb = esp_camera_fb_get();
+        assert(fb);
+
+        char str[128];
+        int len = snprintf(str, sizeof(str), "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
+        write(client_sock, str, len);
+        write(client_sock, fb->buf, fb->len);
+
+        esp_camera_fb_return(fb);
+        printf("tick\r\n");
+    }
+
+    close(client_sock);
+  }
+}
+
 void app_main()
 {
 		esp_err_t ret = nvs_flash_init();
@@ -271,6 +322,9 @@ void app_main()
         /* Register URI handlers */
         httpd_register_uri_handler(server, &uri_get);
     }
+
+    BaseType_t res = xTaskCreate(server_task, "server_task", 4096, NULL, 1, NULL);
+    assert(res);
 
 		for(;;) {
 			vTaskDelay(1000);
