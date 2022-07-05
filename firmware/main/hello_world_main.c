@@ -11,6 +11,7 @@
 #include "lwip/sockets.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
+#include "stdatomic.h"
 
 // =============================== SETUP ======================================
 
@@ -105,6 +106,8 @@
 
 static const char *TAG = "example:take_picture";
 
+#define FB_COUNT 4
+
 static camera_config_t camera_config = {
     .pin_pwdn = CAM_PIN_PWDN,
     .pin_reset = CAM_PIN_RESET,
@@ -133,7 +136,7 @@ static camera_config_t camera_config = {
     .frame_size = FRAMESIZE_VGA,    //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
 
     .jpeg_quality = 12, //0-63 lower number means higher quality
-    .fb_count = 4,       //if more than one, i2s runs in continuous mode. Use only with JPEG
+    .fb_count = FB_COUNT,       //if more than one, i2s runs in continuous mode. Use only with JPEG
     .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
 };
 
@@ -236,7 +239,93 @@ httpd_uri_t uri_get = {
     char str[128];
 #define MAX_CLIENTS 4
 int clients[MAX_CLIENTS];
+
+atomic_int clients_count;
+QueueHandle_t Qs[MAX_CLIENTS];
+bool active[MAX_CLIENTS];
+
+typedef struct {
+  camera_fb_t* fb;
+  atomic_int refcount;
+} camera_fb_rc_t;
+
+void fb_drop(camera_fb_rc_t* fb) {
+  if(atomic_fetch_sub(&fb->refcount, 1) == 1) {
+    esp_camera_fb_return(fb->fb);
+    free(fb);
+  }
+}
+
+void camera_task(void *p) {
+
+  for(;;) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if(!fb) {
+      printf("no buffer\r\n");
+      continue;
+    }
+    assert(fb);
+
+    camera_fb_rc_t* rc = malloc(sizeof(*rc));
+    rc->fb = fb;
+    atomic_store(&rc->refcount, 1);
+
+    for(int i = 0; i < MAX_CLIENTS; i++) {
+      if(active[i]) {
+        atomic_fetch_add(&rc->refcount, 1);
+        if(!xQueueSend(Qs[i], &rc, 0)) {
+          fb_drop(rc);
+        }
+      }
+    }
+    fb_drop(rc);
+  }
+}
+
+typedef struct {
+  int socket;
+  QueueHandle_t queue;
+} stream_params_t;
+
+stream_params_t params[MAX_CLIENTS];
+
+void stream_task(void *p) {
+  stream_params_t *params = p;
+
+  read(params->socket, s, sizeof(s));
+  printf("client accepted\n");
+
+  const char *str = "HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=" PART_BOUNDARY "\r\nConnection: close\r\n";
+  write(params->socket, str, strlen(str));
+  bool connected = true;
+  while(connected) {
+    camera_fb_rc_t* rc = NULL;
+    BaseType_t ret = xQueueReceive(params->queue, &rc, portMAX_DELAY);
+
+    char hdr[256];
+    int len = snprintf(hdr, sizeof(hdr), "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", rc->fb->len);
+
+    if(write(params->socket, hdr, len) != len) {
+      connected = false;
+    } else {
+      if(write(params->socket, rc->fb->buf, rc->fb->len) != rc->fb->len) {
+        connected = false;
+      }
+    }
+
+    fb_drop(rc);
+  }
+
+  close(params->socket);
+  vTaskDelete(NULL);
+}
+
 void server_task(void* p) {
+  for(int i = 0; i < MAX_CLIENTS; i++) {
+    Qs[i] = xQueueCreate(1, sizeof(camera_fb_rc_t*));
+    assert(Qs[i]);
+  }
+
   struct sockaddr_in addr;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_family = AF_INET;
@@ -251,20 +340,28 @@ void server_task(void* p) {
   err = listen(sock, 1);
   assert(err == 0);
 
-  err = fcntl (sock, F_SETFL , O_NONBLOCK );
-  assert(err == 0);
-
-  for(int i = 0; i < MAX_CLIENTS; i++) {
-    clients[i] = -1;
-  }
-
-
   for(;;) {
     int client_sock = accept(sock, NULL, NULL);
     if(client_sock >= 0) {
+      if(atomic_load(&clients_count) >= MAX_CLIENTS) {
+        close(client_sock);
+      } else {
+        int idx = atomic_load(&clients_count);
+        stream_params_t *p = &params[idx];
+        p->socket = client_sock;
+        p->queue = Qs[idx];
+        BaseType_t ret = xTaskCreate(stream_task, "client", 4096, p, 1, NULL);
+        assert(ret);
+        active[idx] = true;
+        atomic_fetch_add(&clients_count, 1);
+      }
+    }
+  }
+/*
       bool ok = false;
       for(int i = 0; i < MAX_CLIENTS; i++) {
         if(clients[i] == -1) {
+          assert(err == 0);
           clients[i] = client_sock;
           ok = true;
           // read request
@@ -291,7 +388,7 @@ void server_task(void* p) {
 
     for(int i = 0; i < MAX_CLIENTS; i++) {
       if(clients[i] >= 0) {
-        printf("%d %d\n", i, clients[i]);
+        //printf("%d %d\n", i, clients[i]);
         if(write(clients[i], str, len) != len) {
           close(clients[i]);
           clients[i] = -1;
@@ -303,10 +400,12 @@ void server_task(void* p) {
       }
     }
     esp_camera_fb_return(fb);
-    ESP_LOGI(TAG, "tick");
+//    ESP_LOGI(TAG, "tick");
   }
+  */
 }
 
+char stats[1024];
 void app_main()
 {
 		esp_err_t ret = nvs_flash_init();
@@ -351,7 +450,12 @@ void app_main()
     BaseType_t res = xTaskCreate(server_task, "server_task", 4096, NULL, 1, NULL);
     assert(res);
 
+    res = xTaskCreate(camera_task, "cam_task", 4096, NULL, 1, NULL);
+    assert(res);
+
 		for(;;) {
+      vTaskGetRunTimeStats(stats);
+      printf("%s\n", stats);
 			vTaskDelay(1000);
 		}
 
