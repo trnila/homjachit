@@ -6,7 +6,7 @@
 #include "stream.h"
 
 esp_err_t httpd_get_index(httpd_req_t *req){
-  httpd_resp_sendstr(req, "hello world!");
+  httpd_resp_sendstr(req, "<h1>oVerEnginEEred automatic feeder</h1><img id='camera'><img id='camera'><script>document.getElementById('camera').src = `http://${document.location.host}:81/`;</script>");
   return ESP_OK;
 }
 
