@@ -1,6 +1,3 @@
 (sym_lib_table
-  (lib (name "HX711")(type "Legacy")(uri "${KIPRJMOD}/lib/HX711.lib")(options "")(descr ""))
-  (lib (name "esp32")(type "Legacy")(uri "${KIPRJMOD}/lib/ESP32-WROVER-E-N4R8.lib")(options "")(descr ""))
   (lib (name "hamboard")(type "KiCad")(uri "${KIPRJMOD}/lib/hamboard.kicad_sym")(options "")(descr ""))
-  (lib (name "ss33")(type "Legacy")(uri "${KIPRJMOD}/lib/SS33.lib")(options "")(descr ""))
 )
