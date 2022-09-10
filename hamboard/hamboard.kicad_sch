@@ -2035,6 +2035,7 @@
     )
   )
 
+
   (junction (at 54.61 181.61) (diameter 0) (color 0 0 0 0)
     (uuid 0fb6479d-a32f-4633-989d-27491e114747)
   )
@@ -2909,7 +2910,7 @@
     (effects (font (size 1.27 1.27)) (justify left bottom))
     (uuid 570dd0b7-0927-484f-8e72-0f9694db7abf)
   )
-  (label "WEIGHT_DATA" (at 99.06 66.04 180)
+  (label "WEIGHT_DATA" (at 91.44 66.04 180)
     (effects (font (size 1.27 1.27)) (justify right bottom))
     (uuid 5c309306-9780-44ce-99f6-b7e64b00fd97)
   )
@@ -3255,6 +3256,24 @@
     (pin "7" (uuid bd326e8c-9df0-4d1b-b877-dd1d37f90d06))
     (pin "8" (uuid 329f9694-b17d-4cf4-898b-31986a72a761))
     (pin "9" (uuid 125f2ab1-2472-4798-8499-98f75c4c2f89))
+  )
+
+  (symbol (lib_id "Device:R") (at 95.25 66.04 270) (unit 1)
+    (in_bom yes) (on_board yes)
+    (uuid 147d7026-5bd9-4756-8c12-bcab3429c469)
+    (property "Reference" "R7" (id 0) (at 95.25 60.325 90))
+    (property "Value" "0R" (id 1) (at 95.25 66.04 90))
+    (property "Footprint" "Resistor_SMD:R_0805_2012Metric" (id 2) (at 95.25 64.262 90)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" "~" (id 3) (at 95.25 66.04 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "LCSC" "C2930231" (id 4) (at 93.9799 64.135 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (pin "1" (uuid 9eb8d843-f13b-4a82-bd11-32d66d14e03d))
+    (pin "2" (uuid 7f6aabc8-a845-4003-8a8b-a5bca2236526))
   )
 
   (symbol (lib_id "Device:R") (at 233.68 140.97 90) (unit 1)
@@ -5496,6 +5515,9 @@
     (path "/9d7a3984-de1b-4ad5-b898-f4d863cf2cf3"
       (reference "R6") (unit 1) (value "1k") (footprint "Resistor_SMD:R_0805_2012Metric")
     )
+    (path "/147d7026-5bd9-4756-8c12-bcab3429c469"
+      (reference "R7") (unit 1) (value "0R") (footprint "Resistor_SMD:R_0805_2012Metric")
+    )
     (path "/3db32334-eac2-48ca-a9a6-7574cd038c35"
       (reference "R8") (unit 1) (value "10k") (footprint "Resistor_SMD:R_0805_2012Metric")
     )
@@ -5534,9 +5556,6 @@
     )
     (path "/5327a147-68fc-4492-abf9-1c498ebd9599/9612e1af-936e-46bb-b38f-d498561febb5"
       (reference "TP4") (unit 1) (value "TestPoint") (footprint "TestPoint:TestPoint_Pad_D1.5mm")
-    )
-    (path "/5327a147-68fc-4492-abf9-1c498ebd9599/deb36bfb-47f4-4298-8b09-1117a2a096bc"
-      (reference "TP5") (unit 1) (value "TestPoint") (footprint "TestPoint:TestPoint_Pad_D1.5mm")
     )
     (path "/cf781b29-da03-4e54-8f16-c9e2324f91c7/262ef5c4-4cf1-41b2-8ac5-4de463b38dbc"
       (reference "TP7") (unit 1) (value "TestPoint") (footprint "TestPoint:TestPoint_Pad_D1.5mm")
