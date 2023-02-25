@@ -53,6 +53,63 @@ static void cs_low(spi_transaction_t* t) {
   set_pin(IO_SPI_CS, 1);
 }
 
+void motor_read(spi_device_handle_t spi_handle, uint8_t reg) {
+    uint8_t tx[5] = {
+      reg,
+    };
+    uint8_t rx[5] = {};
+    spi_transaction_t t = {};
+    t.length = 40;
+    t.tx_buffer = tx;
+    t.rx_buffer = rx;
+    ESP_ERROR_CHECK(spi_device_polling_transmit(spi_handle, &t));
+
+    ESP_LOG_BUFFER_HEXDUMP("spi", rx, sizeof(rx), ESP_LOG_ERROR);
+}
+
+void motor_write(spi_device_handle_t spi_handle, uint8_t reg, uint32_t data) {
+    uint8_t tx[5] = {
+      reg | (1U << 7U),
+      (data >> 24) & 0xFFU,
+      (data >> 16) & 0xFFU,
+      (data >> 8) & 0xFFU,
+      (data) & 0xFFU,
+    };
+
+    ESP_LOG_BUFFER_HEXDUMP("spitx", tx, sizeof(tx), ESP_LOG_ERROR);
+
+    uint8_t rx[5] = {};
+    spi_transaction_t t = {};
+    t.length = 40;
+    t.tx_buffer = tx;
+    t.rx_buffer = rx;
+    ESP_ERROR_CHECK(spi_device_polling_transmit(spi_handle, &t));
+
+    ESP_LOG_BUFFER_HEXDUMP("spirx", rx, sizeof(rx), ESP_LOG_ERROR);
+}
+
+void motor_writeraw(spi_device_handle_t spi_handle, uint64_t data) {
+    uint8_t tx[5] = {
+      (data >> 32) & 0xFFU,
+      (data >> 24) & 0xFFU,
+      (data >> 16) & 0xFFU,
+      (data >> 8) & 0xFFU,
+      (data) & 0xFFU,
+    };
+
+    ESP_LOG_BUFFER_HEXDUMP("spitx", tx, sizeof(tx), ESP_LOG_ERROR);
+
+    uint8_t rx[5] = {};
+    spi_transaction_t t = {};
+    t.length = 40;
+    t.tx_buffer = tx;
+    t.rx_buffer = rx;
+    ESP_ERROR_CHECK(spi_device_polling_transmit(spi_handle, &t));
+
+    ESP_LOG_BUFFER_HEXDUMP("spirx", rx, sizeof(rx), ESP_LOG_ERROR);
+}
+
+
 void app_main() {
   gpio_config_t gpio_led = {};
   gpio_led.mode = GPIO_MODE_OUTPUT;
@@ -95,7 +152,7 @@ void app_main() {
   spi_device_interface_config_t devcfg={
     .command_bits = 0,
     .clock_speed_hz = 1000000,
-    .mode = 0,
+    .mode = 3,
     .spics_io_num = -1,
     .queue_size = 1,
     .flags = SPI_DEVICE_POSITIVE_CS,
@@ -106,41 +163,92 @@ void app_main() {
   ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &spi_handle));
 
   set_pin(IO_STEPPER_DIR, 0);
-  set_pin(IO_STEPPER_EN, 0);
+  set_pin(IO_STEPPER_EN, 1);
 
   memset(&gpio_led, 0, sizeof(gpio_led));
   gpio_led.mode = GPIO_MODE_OUTPUT;
   gpio_led.pin_bit_mask = 1ULL << STEP_PIN;
   ESP_ERROR_CHECK(gpio_config(&gpio_led));
 
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_HIGH_SPEED_MODE
+#define LEDC_OUTPUT_IO          (STEP_PIN) // Define the output GPIO
+#define LEDC_CHANNEL            LEDC_CHANNEL_0
+#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY               (4095) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
+
+//  motor_write(spi_handle, 0x00, (1U << 1U));
+
+  //motor_write(spi_handle, 0x6c, 4);
+
+  /*
+  motor_write(spi_handle, 0x10, (20) | (31<<8) | (1 << 16));
+  motor_write(spi_handle, 0x11, 127);
+
+
+  // chopper
+  motor_write(spi_handle, 0x00, (1U << 1U) | (1U << 2U));
+
+  motor_write(spi_handle, 0x70, (1U << 18U) | (1U << 8U) | (255));
+
+  motor_write(spi_handle, 0x6c, 4 | (2 << 15) | (4 << 4));
+
+  motor_write(spi_handle, 0x13, 500);
+  */
+
+  motor_writeraw(spi_handle, 0xEC000100C3);
+  motor_writeraw(spi_handle, 0x9000061F0A);
+  motor_writeraw(spi_handle, 0x910000000A);
+  motor_writeraw(spi_handle, 0x8000000004 | (1 << 1));
+  motor_writeraw(spi_handle, 0x9300000fff);
+  motor_writeraw(spi_handle, 0x601c8 | 252);
+
+    ledc_timer_config_t ledc_timer = {
+      .speed_mode       = LEDC_MODE,
+      .timer_num        = LEDC_TIMER,
+      .duty_resolution  = LEDC_DUTY_RES,
+      .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
+      .clk_cfg          = LEDC_AUTO_CLK
+  };
+  ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+  // Prepare and then apply the LEDC PWM channel configuration
+  ledc_channel_config_t ledc_channel = {
+      .speed_mode     = LEDC_MODE,
+      .channel        = LEDC_CHANNEL,
+      .timer_sel      = LEDC_TIMER,
+      .intr_type      = LEDC_INTR_DISABLE,
+      .gpio_num       = LEDC_OUTPUT_IO,
+      .duty           = 0, // Set duty to 0%
+      .hpoint         = 0
+  };
+  set_pin(IO_STEPPER_EN, 0);
+  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+
+  ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
+
   int i = 0;
   bool led_state = false; 
   for(;;) {
   //  ESP_LOGI("test", "cus kaktus %d %d", i++, gpio_get_level(BTN_PIN));
-    gpio_set_level(LED_PIN, led_state);
-    led_state = !led_state;
+    //gpio_set_level(LED_PIN, led_state);
+    //led_state = !led_state;
 
-    uint8_t write_buf[] = {0x01, led_state ? 0xFF : 0x00};
-    ESP_ERROR_CHECK(i2c_master_write_to_device(i2c_master_port, 0x18, write_buf, sizeof(write_buf), 1000 / portTICK_PERIOD_MS));
+    //uint8_t write_buf[] = {0x01, led_state ? 0xFF : 0x00};
+    //ESP_ERROR_CHECK(i2c_master_write_to_device(i2c_master_port, 0x18, write_buf, sizeof(write_buf), 1000 / portTICK_PERIOD_MS));
     
-    set_pin(2, led_state);
+    //set_pin(2, led_state);
 
     //esp_rom_delay_us(100);
 
-    gpio_set_level(STEP_PIN, led_state);
+    //gpio_set_level(STEP_PIN, led_state);
 
+    ESP_LOGE("TAG", "cus");
+    motor_read(spi_handle, 0x01);
+    motor_read(spi_handle, 0x6F);
 
-    uint8_t tx[5] = {
-      0x04,
-    };
-    uint8_t rx[5] = {};
-    spi_transaction_t t = {};
-    t.length = 40;
-    t.tx_buffer = tx;
-    t.rx_buffer = rx;
-    ESP_ERROR_CHECK(spi_device_polling_transmit(spi_handle, &t));
-
-    ESP_LOG_BUFFER_HEXDUMP("spi", rx, sizeof(rx), ESP_LOG_ERROR);
+    vTaskDelay(1);
   }
 
   nvs_flash_init();
