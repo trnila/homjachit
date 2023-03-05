@@ -7,6 +7,8 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/spi_master.h"
+#include <driver/mcpwm.h>
+
 
 
 
@@ -62,6 +64,7 @@ void motor_read(spi_device_handle_t spi_handle, uint8_t reg) {
     t.length = 40;
     t.tx_buffer = tx;
     t.rx_buffer = rx;
+    ESP_ERROR_CHECK(spi_device_polling_transmit(spi_handle, &t));
     ESP_ERROR_CHECK(spi_device_polling_transmit(spi_handle, &t));
 
     ESP_LOG_BUFFER_HEXDUMP("spi", rx, sizeof(rx), ESP_LOG_ERROR);
@@ -151,7 +154,7 @@ void app_main() {
   spi_device_handle_t spi_handle;
   spi_device_interface_config_t devcfg={
     .command_bits = 0,
-    .clock_speed_hz = 1000000,
+    .clock_speed_hz = 100000,
     .mode = 3,
     .spics_io_num = -1,
     .queue_size = 1,
@@ -169,14 +172,6 @@ void app_main() {
   gpio_led.mode = GPIO_MODE_OUTPUT;
   gpio_led.pin_bit_mask = 1ULL << STEP_PIN;
   ESP_ERROR_CHECK(gpio_config(&gpio_led));
-
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_HIGH_SPEED_MODE
-#define LEDC_OUTPUT_IO          (STEP_PIN) // Define the output GPIO
-#define LEDC_CHANNEL            LEDC_CHANNEL_0
-#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (4095) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
-#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 //  motor_write(spi_handle, 0x00, (1U << 1U));
 
@@ -201,32 +196,25 @@ void app_main() {
   motor_writeraw(spi_handle, 0x9000061F0A);
   motor_writeraw(spi_handle, 0x910000000A);
   motor_writeraw(spi_handle, 0x8000000004 | (1 << 1));
-  motor_writeraw(spi_handle, 0x9300000fff);
-  motor_writeraw(spi_handle, 0x601c8 | 252);
+  motor_writeraw(spi_handle, 0x93000001F4);
+  motor_writeraw(spi_handle, 0xF0000401C8);
 
-    ledc_timer_config_t ledc_timer = {
-      .speed_mode       = LEDC_MODE,
-      .timer_num        = LEDC_TIMER,
-      .duty_resolution  = LEDC_DUTY_RES,
-      .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
-      .clk_cfg          = LEDC_AUTO_CLK
-  };
-  ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+   
+  mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, STEP_PIN);
 
-  // Prepare and then apply the LEDC PWM channel configuration
-  ledc_channel_config_t ledc_channel = {
-      .speed_mode     = LEDC_MODE,
-      .channel        = LEDC_CHANNEL,
-      .timer_sel      = LEDC_TIMER,
-      .intr_type      = LEDC_INTR_DISABLE,
-      .gpio_num       = LEDC_OUTPUT_IO,
-      .duty           = 0, // Set duty to 0%
-      .hpoint         = 0
-  };
+  // Configure the PWM signal parameters
+  mcpwm_config_t pwm_config;
+  pwm_config.frequency = 50000;  // Set the frequency to 100kHz
+  pwm_config.cmpr_a = 50.0;       // Set the duty cycle to 50%
+  pwm_config.counter_mode = MCPWM_UP_COUNTER;
+  pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
+
+  // Set the configuration
+  mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
+
+
+
   set_pin(IO_STEPPER_EN, 0);
-  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-
-  ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
 
   int i = 0;
   bool led_state = false; 
@@ -244,11 +232,12 @@ void app_main() {
 
     //gpio_set_level(STEP_PIN, led_state);
 
-    ESP_LOGE("TAG", "cus");
     motor_read(spi_handle, 0x01);
     motor_read(spi_handle, 0x6F);
+    motor_read(spi_handle, 0x04);
+    ESP_LOGE("TAG", "\n\n");
 
-    vTaskDelay(1);
+    vTaskDelay(10);
   }
 
   nvs_flash_init();
