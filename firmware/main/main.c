@@ -112,6 +112,9 @@ void motor_writeraw(spi_device_handle_t spi_handle, uint64_t data) {
     ESP_LOG_BUFFER_HEXDUMP("spirx", rx, sizeof(rx), ESP_LOG_ERROR);
 }
 
+static void IRAM_ATTR weight_ready_isr_handler(void* arg) {  
+  ESP_LOGE("x", "ISR\n");
+}
 
 void app_main() {
   gpio_config_t gpio_led = {};
@@ -136,6 +139,42 @@ void app_main() {
   };
   ESP_ERROR_CHECK(i2c_param_config(i2c_master_port, &conf));
   ESP_ERROR_CHECK(i2c_driver_install(i2c_master_port, conf.mode, 0, 0, 0));
+
+
+  spi_bus_config_t buscfgw={
+    .miso_io_num = 0,
+    .mosi_io_num = -1,
+    .sclk_io_num = 23,
+    .quadwp_io_num = -1,
+    .quadhd_io_num = -1,
+    .max_transfer_sz = 4,
+  };
+
+  esp_err_t ret = spi_bus_initialize(SPI3_HOST, &buscfgw, SPI_DMA_DISABLED);
+  ESP_ERROR_CHECK(ret);
+
+  spi_device_interface_config_t confw = {
+      .mode = 1,
+      .clock_speed_hz = 500000,
+      .spics_io_num = -1,
+      .queue_size = 1,
+  };
+
+  spi_device_handle_t weight_spi_dev;
+  ret = spi_bus_add_device(SPI3_HOST, &confw, &weight_spi_dev);
+  ESP_ERROR_CHECK(ret);
+
+   gpio_config_t io_conf;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = 1ULL << 0;
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    io_conf.pull_down_en = false;
+    io_conf.pull_up_en = false;
+    ret = gpio_config(&io_conf);
+    assert(ret == ESP_OK);
+
+    gpio_isr_handler_add(0, weight_ready_isr_handler,NULL);
+
 
   // set all pins to output
   uint8_t write_buf[] = {0x03, 0x00};
@@ -231,13 +270,33 @@ void app_main() {
     //esp_rom_delay_us(100);
 
     //gpio_set_level(STEP_PIN, led_state);
-
+/*
     motor_read(spi_handle, 0x01);
     motor_read(spi_handle, 0x6F);
     motor_read(spi_handle, 0x04);
     ESP_LOGE("TAG", "\n\n");
 
-    vTaskDelay(10);
+
+    vTaskDelay(10);*/
+
+    int clk_bits = 25;
+    spi_transaction_t t = {
+        .flags = SPI_TRANS_USE_RXDATA,
+        .length = clk_bits,
+        .rxlength = clk_bits,
+    };
+
+    spi_device_transmit(weight_spi_dev, &t);
+
+    uint32_t measurement = SPI_SWAP_DATA_RX(*(uint32_t*)t.rx_data, clk_bits - 1);
+    // fix 2's complement
+    //if(measurement & (1 << 23)) {
+        //measurement |= 0xFF000000;
+    //}
+
+    ESP_LOGE("TAG", "%x", measurement);
+
+    vTaskDelay(50);
   }
 
   nvs_flash_init();
